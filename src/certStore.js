@@ -139,19 +139,39 @@ class CertStore {
     const client = await this._getAcmeClient();
     const [key, csr] = await acme.forge.createCsr({ commonName: domain });
 
-    const cert = await client.auto({
-      csr,
-      email: this.acmeEmail,
-      termsOfServiceAgreed: true,
-      challengePriority: ['http-01'],
-      challengeCreateFn: async (authz, challenge, keyAuthorization) => {
-        if (challenge.type !== 'http-01') return;
-        this.challenges.set(challenge.token, keyAuthorization);
-      },
-      challengeRemoveFn: async (authz, challenge) => {
-        this.challenges.delete(challenge.token);
-      },
-    });
+    let cert;
+    try {
+      cert = await client.auto({
+        csr,
+        email: this.acmeEmail,
+        termsOfServiceAgreed: true,
+        challengePriority: ['http-01'],
+        challengeCreateFn: async (authz, challenge, keyAuthorization) => {
+          if (challenge.type !== 'http-01') return;
+          this.challenges.set(challenge.token, keyAuthorization);
+        },
+        challengeRemoveFn: async (authz, challenge) => {
+          this.challenges.delete(challenge.token);
+        },
+      });
+    } catch (err) {
+      // acme-client's retry logic has a known bug: a pure network failure
+      // (no HTTP response at all) talking to Let's Encrypt, after retries
+      // are exhausted, throws this exact confusing TypeError instead of the
+      // real network error. Surface a clearer, actionable message instead.
+      if (err instanceof TypeError && /reading 'config'/.test(err.message)) {
+        throw new Error(
+          `Failed to reach Let's Encrypt while requesting a certificate for ${domain} ` +
+            "(a network-level failure was hidden by a bug in the acme-client library). " +
+            'Check outbound internet access from this machine to acme-v02.api.letsencrypt.org, ' +
+            'and that inbound port 80 is reachable from the internet for the HTTP-01 challenge ' +
+            '(Let\'s Encrypt must be able to fetch http://' +
+            domain +
+            '/.well-known/acme-challenge/... from outside your network). Then try again.'
+        );
+      }
+      throw err;
+    }
 
     return { cert: cert.toString(), key: key.toString() };
   }

@@ -113,6 +113,25 @@ tunnelme serve --token "long-random-string" ...
 tunnelme --port 3000 --url app.example.com --token "long-random-string"
 ```
 
+## Diagnostics
+
+**Request logging** — `tunnelme serve` logs every request it sees on both
+:80 and :443 (method, path, remote address, domain), plus connection
+open/close events. Useful for confirming traffic is actually reaching the
+tunnel server at all before worrying about your local app.
+
+**`GET /host/live`** — every registered domain answers this path directly
+from the tunnel server itself, without forwarding to your local app:
+
+```powershell
+curl https://app.example.com/host/live
+# {"live":true,"domain":"app.example.com","checkedAt":"..."}
+```
+
+This proves DNS + port-forwarding + TLS + an actively-connected client are
+all working, independent of whether your local app is up — handy for
+isolating "is the tunnel broken" from "is my app broken".
+
 ## Running `serve` continuously
 
 For a long-running setup, run it under a process manager so it survives

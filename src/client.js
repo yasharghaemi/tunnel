@@ -3,7 +3,7 @@
 const net = require('net');
 const WebSocket = require('ws');
 const { createWebSocketStream } = require('ws');
-const { log, pipeBidirectional } = require('./util');
+const { log, pipeBidirectional, describeError } = require('./util');
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 15000];
 
@@ -66,7 +66,7 @@ function startClient(opts) {
     });
 
     ws.on('error', (err) => {
-      log('control connection error:', err.message);
+      log('control connection error:', describeError(err));
     });
   }
 
@@ -90,7 +90,7 @@ function startClient(opts) {
     });
 
     dataWs.on('error', (err) => {
-      log(`data connection error for ${domain}:`, err.message);
+      log(`data connection error for ${domain}:`, describeError(err));
     });
   }
 

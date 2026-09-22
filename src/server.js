@@ -5,9 +5,15 @@ const tls = require('tls');
 const crypto = require('crypto');
 const { WebSocketServer, WebSocket, createWebSocketStream } = require('ws');
 const { CertStore } = require('./certStore');
-const { log, secureCompare, pipeBidirectional } = require('./util');
+const { log, secureCompare, pipeBidirectional, logRequestLines } = require('./util');
 
 const CONN_WAIT_TIMEOUT_MS = 15000;
+const LIVE_CHECK_PATH = '/host/live';
+const LIVE_CHECK_LINE_RE = /^(GET|HEAD) \/host\/live(\?\S*)? HTTP\/\d\.\d\r?$/;
+
+function liveCheckBody(domain) {
+  return JSON.stringify({ live: true, domain, checkedAt: new Date().toISOString() });
+}
 
 function startServer(opts) {
   const {
@@ -122,6 +128,8 @@ function startServer(opts) {
 
   // ---- Plain :80 server: ACME http-01 challenges + redirect to https ----
   const httpServer = http.createServer((req, res) => {
+    const remote = `${req.socket.remoteAddress}:${req.socket.remotePort}`;
+    log(`${remote} -> ${req.headers.host || '(no host)'} ${req.method} ${req.url}`);
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (url.pathname.startsWith('/.well-known/acme-challenge/')) {
       const token_ = url.pathname.split('/').pop();
@@ -139,6 +147,11 @@ function startServer(opts) {
     if (!domainClients.has(host)) {
       res.writeHead(404);
       res.end('not found');
+      return;
+    }
+    if (url.pathname === LIVE_CHECK_PATH) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(liveCheckBody(host));
       return;
     }
     const portSuffix = httpsPort === 443 ? '' : `:${httpsPort}`;
@@ -177,9 +190,39 @@ function startServer(opts) {
 
   httpsServer.on('tlsClientError', () => {});
 
-  async function proxyRawConnection(socket, domain) {
+  function proxyRawConnection(socket, domain) {
+    const remote = `${socket.remoteAddress}:${socket.remotePort}`;
+    log(`connection from ${remote} for ${domain}`);
+    socket.on('close', () => log(`connection closed from ${remote} for ${domain}`));
+
+    // Peek at the first chunk to catch the /host/live health check, which the
+    // server answers directly (proves the tunnel is reachable without needing
+    // the local app to be up). Anything else is pushed back with unshift()
+    // and proxied exactly as before. pause()+unshift() happen synchronously
+    // within this handler so no bytes are lost between the peek and the retry.
+    socket.once('data', (chunk) => {
+      const firstLine = chunk.toString('latin1').split('\r\n', 1)[0];
+      if (LIVE_CHECK_LINE_RE.test(firstLine)) {
+        log(`${remote} -> ${domain} GET ${LIVE_CHECK_PATH} (answered by tunnelme server)`);
+        const body = liveCheckBody(domain);
+        socket.end(
+          `HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`
+        );
+        return;
+      }
+      socket.pause();
+      socket.unshift(chunk);
+      forwardToClient(socket, domain, remote);
+    });
+  }
+
+  async function forwardToClient(socket, domain, remote) {
     try {
+      // Wait for the client's data connection before attaching any 'data'
+      // consumer -- attaching one earlier would switch the socket into
+      // flowing mode and could drop bytes that arrive before pipe() is wired up.
       const dataStream = await requestProxyConnection(domain);
+      logRequestLines(socket, `${remote} -> ${domain}`);
       pipeBidirectional(socket, dataStream);
     } catch (err) {
       log(`proxy failed for ${domain}:`, err.message);
