@@ -52,8 +52,8 @@ class CertStore {
   saveToDisk(domain, { cert, key }) {
     const dir = this.domainDir(domain);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'cert.pem'), cert);
-    fs.writeFileSync(path.join(dir, 'key.pem'), key);
+    fs.writeFileSync(path.join(dir, 'cert.pem'), cert, { mode: 0o644 });
+    fs.writeFileSync(path.join(dir, 'key.pem'), key, { mode: 0o600 });
   }
 
   _certExpiry(certPem) {
@@ -125,7 +125,7 @@ class CertStore {
       accountKey = fs.readFileSync(accountKeyPath);
     } else {
       accountKey = await acme.forge.createPrivateKey();
-      fs.writeFileSync(accountKeyPath, accountKey);
+      fs.writeFileSync(accountKeyPath, accountKey, { mode: 0o600 });
     }
 
     this._acmeClient = new acme.Client({

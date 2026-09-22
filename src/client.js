@@ -3,12 +3,9 @@
 const net = require('net');
 const WebSocket = require('ws');
 const { createWebSocketStream } = require('ws');
+const { log, pipeBidirectional } = require('./util');
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 15000];
-
-function log(...args) {
-  console.log(new Date().toISOString(), ...args);
-}
 
 /**
  * @param {object} opts
@@ -22,10 +19,12 @@ function startClient(opts) {
 
   let attempt = 0;
   let stopped = false;
+  let currentWs = null;
 
   function connect() {
     if (stopped) return;
     const ws = new WebSocket(`${serverUrl}/_tunnelme/control`);
+    currentWs = ws;
 
     ws.on('open', () => {
       attempt = 0;
@@ -48,6 +47,7 @@ function startClient(opts) {
       }
 
       if (msg.type === 'registered') {
+        if (!Array.isArray(msg.domains)) return;
         for (const domain of msg.domains) {
           const port = portByDomain.get(domain);
           log(`tunnel active: https://${domain} -> localhost:${port}`);
@@ -60,6 +60,7 @@ function startClient(opts) {
     });
 
     ws.on('close', () => {
+      if (stopped) return;
       log('disconnected from tunnel server, reconnecting...');
       scheduleReconnect();
     });
@@ -85,19 +86,7 @@ function startClient(opts) {
     dataWs.on('open', () => {
       const dataStream = createWebSocketStream(dataWs, { decodeStrings: false });
       const localSocket = net.connect(port, 'localhost');
-
-      const cleanup = () => {
-        localSocket.destroy();
-        dataStream.destroy();
-      };
-
-      localSocket.on('error', cleanup);
-      dataStream.on('error', cleanup);
-      localSocket.on('close', cleanup);
-      dataStream.on('close', cleanup);
-
-      localSocket.pipe(dataStream);
-      dataStream.pipe(localSocket);
+      pipeBidirectional(localSocket, dataStream);
     });
 
     dataWs.on('error', (err) => {
@@ -110,6 +99,7 @@ function startClient(opts) {
   return {
     stop() {
       stopped = true;
+      if (currentWs) currentWs.close();
     },
   };
 }

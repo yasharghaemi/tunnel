@@ -27,7 +27,7 @@ function loadConfig(configPath) {
     throw new Error(`Config file ${resolved} must define a non-empty "tunnels" array`);
   }
   for (const [i, t] of data.tunnels.entries()) {
-    if (!t.port || !t.url) {
+    if (t.port === undefined || t.port === null || !t.url) {
       throw new Error(`tunnels[${i}] must have both "port" and "url"`);
     }
   }

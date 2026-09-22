@@ -5,12 +5,9 @@ const tls = require('tls');
 const crypto = require('crypto');
 const { WebSocketServer, WebSocket, createWebSocketStream } = require('ws');
 const { CertStore } = require('./certStore');
+const { log, secureCompare, pipeBidirectional } = require('./util');
 
 const CONN_WAIT_TIMEOUT_MS = 15000;
-
-function log(...args) {
-  console.log(new Date().toISOString(), ...args);
-}
 
 function startServer(opts) {
   const {
@@ -62,14 +59,18 @@ function startServer(opts) {
       }
 
       if (msg.type === 'register') {
-        if (token && msg.token !== token) {
+        if (token && !secureCompare(msg.token || '', token)) {
           ws.send(JSON.stringify({ type: 'error', message: 'invalid token' }));
           ws.close();
           return;
         }
+        if (!Array.isArray(msg.tunnels)) {
+          ws.send(JSON.stringify({ type: 'error', message: '"tunnels" must be an array' }));
+          return;
+        }
         const registered = [];
-        for (const t of msg.tunnels || []) {
-          if (!t.domain || !t.port) continue;
+        for (const t of msg.tunnels) {
+          if (!t || !t.domain || t.port === undefined || t.port === null) continue;
           domainClients.set(t.domain, ws);
           ownedDomains.add(t.domain);
           registered.push(t.domain);
@@ -135,6 +136,11 @@ function startServer(opts) {
       return;
     }
     const host = (req.headers.host || '').split(':')[0];
+    if (!domainClients.has(host)) {
+      res.writeHead(404);
+      res.end('not found');
+      return;
+    }
     const portSuffix = httpsPort === 443 ? '' : `:${httpsPort}`;
     res.writeHead(301, { location: `https://${host}${portSuffix}${req.url}` });
     res.end();
@@ -174,17 +180,7 @@ function startServer(opts) {
   async function proxyRawConnection(socket, domain) {
     try {
       const dataStream = await requestProxyConnection(domain);
-      socket.pipe(dataStream);
-      dataStream.pipe(socket);
-
-      const cleanup = () => {
-        socket.destroy();
-        dataStream.destroy();
-      };
-      socket.on('error', cleanup);
-      dataStream.on('error', cleanup);
-      socket.on('close', cleanup);
-      dataStream.on('close', cleanup);
+      pipeBidirectional(socket, dataStream);
     } catch (err) {
       log(`proxy failed for ${domain}:`, err.message);
       socket.destroy();

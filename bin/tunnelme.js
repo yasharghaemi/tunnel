@@ -21,20 +21,22 @@ program
   .option('-p, --port <port>', 'local port to expose', (v) => parseInt(v, 10))
   .option('-u, --url <domain>', 'public domain to route to the local port')
   .option('-c, --config <path>', 'config file with multiple tunnels (.yaml/.json)')
-  .option('-s, --server <url>', 'tunnelme server control address', 'ws://localhost:7000')
+  .option('-s, --server <url>', 'tunnelme server control address')
   .option('-t, --token <token>', 'shared secret expected by the server')
   .action((opts) => {
-    let serverUrl = opts.server;
+    const DEFAULT_SERVER = 'ws://localhost:7000';
+    let serverUrl;
     let token = opts.token || null;
     let tunnels;
 
     if (opts.config) {
       const cfg = loadConfig(opts.config);
-      serverUrl = opts.server !== 'ws://localhost:7000' ? opts.server : cfg.server || serverUrl;
+      serverUrl = opts.server || cfg.server || DEFAULT_SERVER;
       token = opts.token || cfg.token || null;
       tunnels = cfg.tunnels.map((t) => ({ port: t.port, domain: t.url }));
     } else {
-      if (!opts.port || !opts.url) {
+      serverUrl = opts.server || DEFAULT_SERVER;
+      if (opts.port === undefined || Number.isNaN(opts.port) || !opts.url) {
         console.error('Error: --port and --url are required (or pass --config)');
         process.exit(1);
       }
