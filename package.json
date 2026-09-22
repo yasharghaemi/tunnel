@@ -1,0 +1,32 @@
+{
+  "name": "tunnelmate",
+  "version": "0.1.0",
+  "description": "Reverse-proxy a public domain to a localhost port, for dev/testing.",
+  "license": "MIT",
+  "type": "commonjs",
+  "keywords": [
+    "tunnel",
+    "reverse-proxy",
+    "localhost",
+    "ngrok",
+    "dev-server",
+    "self-hosted"
+  ],
+  "bin": {
+    "tunnelme": "bin/tunnelme.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "dependencies": {
+    "acme-client": "^5.4.0",
+    "commander": "^12.1.0",
+    "js-yaml": "^4.1.0",
+    "selfsigned": "^2.4.1",
+    "ws": "^8.18.0"
+  }
+}
