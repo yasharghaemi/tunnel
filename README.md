@@ -68,14 +68,25 @@ add `--staging` first, then drop it once it's working end-to-end.
 
 ## Expose a local dev server
 
-In a second terminal, on whichever machine is running your app:
+If your app and `serve` run on the **same machine**, skip the second
+terminal entirely by passing `--port`/`--url` straight to `serve` — it starts
+the server and the tunnel together in one process:
 
 ```powershell
-tunnelme --port 3000 --url app.example.com --server ws://localhost:7000
+tunnelme serve --tls acme --email you@example.com --port 3000 --url app.example.com
 ```
 
-(If the client runs on a different machine than `serve`, point `--server` at
-that machine's LAN IP, e.g. `ws://192.168.1.50:7000`.)
+(`--config <path>` works here too, for multiple tunnels — see below.)
+
+If your app runs on a **different machine**, run `serve` there once, then run
+the client separately wherever the app lives:
+
+```powershell
+tunnelme --port 3000 --url app.example.com --server ws://192.168.1.50:7000
+```
+
+(`--server` points at whichever machine is running `serve`; use `localhost`
+if they're the same box, or its LAN IP otherwise.)
 
 Visit `https://app.example.com` — it now proxies to `localhost:3000`.
 
@@ -151,4 +162,10 @@ tunnelme --config <path> [--server <ws-url>] [--token <token>]
 tunnelme serve [--http-port 80] [--https-port 443] [--control-port 7000]
                [--tls acme|self-signed] [--email <email>] [--staging]
                [--certs-dir <path>] [--token <token>]
+               [--port <port> --url <domain>] [--config <path>]
 ```
+
+The last line of `serve`'s options is optional: pass `--port`/`--url` (or
+`--config`) to also run a local tunnel in the same process, against the
+server's own control port — one terminal instead of two, when both run on
+the same machine.
