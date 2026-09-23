@@ -28,11 +28,14 @@ Once published to npm (package name `tunnelmate`, command stays `tunnelme`):
 npm install -g tunnelmate
 ```
 
-For local development against this source tree instead:
+For local development against this source tree instead (the source is
+TypeScript, compiled to `dist/` — the `tunnelme` bin points at the compiled
+output, so build once before linking, and after any source change):
 
 ```powershell
 cd C:\codes\tunnel
 npm install
+npm run build
 npm link
 ```
 
