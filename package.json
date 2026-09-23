@@ -29,5 +29,11 @@
     "js-yaml": "^4.1.0",
     "selfsigned": "^2.4.1",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
+  },
+  "scripts": {
+    "prepare": "husky"
   }
 }

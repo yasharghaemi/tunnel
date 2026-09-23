@@ -1,0 +1,9 @@
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.js')
+
+if [ -z "$files" ]; then
+  exit 0
+fi
+
+for f in $files; do
+  node --check "$f" || exit 1
+done
