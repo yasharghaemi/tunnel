@@ -30,3 +30,6 @@ coverage/
 
 # npm
 .npmrc
+.claude
+.cursor
+.agent
