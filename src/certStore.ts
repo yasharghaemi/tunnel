@@ -1,43 +1,65 @@
-'use strict';
-
-const fs = require('fs');
-const path = require('path');
-const tls = require('tls');
-const acme = require('acme-client');
-const selfsigned = require('selfsigned');
+import * as fs from 'fs';
+import * as path from 'path';
+import * as tls from 'tls';
+import * as crypto from 'crypto';
+import * as acme from 'acme-client';
+import * as selfsigned from 'selfsigned';
 
 const LETS_ENCRYPT_PROD = 'https://acme-v02.api.letsencrypt.org/directory';
 const LETS_ENCRYPT_STAGING = 'https://acme-v02.api.letsencrypt.org/directory'.replace('acme-v02', 'acme-staging-v02');
 
 const RENEW_WITHIN_MS = 30 * 24 * 60 * 60 * 1000; // renew if <30 days left
 
-class CertStore {
-  /**
-   * @param {object} opts
-   * @param {string} opts.certsDir directory to persist certs/account key
-   * @param {'acme'|'self-signed'} opts.mode
-   * @param {string} [opts.acmeEmail] contact email for Let's Encrypt account
-   * @param {boolean} [opts.staging] use LE staging directory (for testing, no rate limits)
-   */
-  constructor(opts) {
+export type TlsMode = 'acme' | 'self-signed';
+
+export interface CertStoreOptions {
+  certsDir: string;
+  mode: TlsMode;
+  /** contact email for Let's Encrypt account */
+  acmeEmail?: string;
+  /** use LE staging directory (for testing, no rate limits) */
+  staging?: boolean;
+}
+
+interface CertKeyPair {
+  cert: string;
+  key: string;
+}
+
+interface CachedCert {
+  ctx: tls.SecureContext;
+  expiresAt: number;
+}
+
+interface DiskCert extends CertKeyPair {
+  expiresAt: number;
+}
+
+export class CertStore {
+  private certsDir: string;
+  private mode: TlsMode;
+  private acmeEmail?: string;
+  private staging: boolean;
+
+  private cache = new Map<string, CachedCert>();
+  private pending = new Map<string, Promise<tls.SecureContext>>();
+  private challenges = new Map<string, string>();
+  private acmeClient: acme.Client | null = null;
+
+  constructor(opts: CertStoreOptions) {
     this.certsDir = opts.certsDir;
     this.mode = opts.mode;
     this.acmeEmail = opts.acmeEmail;
     this.staging = !!opts.staging;
 
-    this.cache = new Map(); // domain -> { ctx, expiresAt }
-    this.pending = new Map(); // domain -> Promise<ctx>
-    this.challenges = new Map(); // token -> keyAuthorization
-    this._acmeClient = null;
-
     fs.mkdirSync(this.certsDir, { recursive: true });
   }
 
-  domainDir(domain) {
+  private domainDir(domain: string): string {
     return path.join(this.certsDir, domain);
   }
 
-  loadFromDisk(domain) {
+  private loadFromDisk(domain: string): DiskCert | null {
     const dir = this.domainDir(domain);
     const certPath = path.join(dir, 'cert.pem');
     const keyPath = path.join(dir, 'key.pem');
@@ -45,20 +67,20 @@ class CertStore {
 
     const cert = fs.readFileSync(certPath, 'utf8');
     const key = fs.readFileSync(keyPath, 'utf8');
-    const expiresAt = this._certExpiry(cert);
+    const expiresAt = this.certExpiry(cert);
     return { cert, key, expiresAt };
   }
 
-  saveToDisk(domain, { cert, key }) {
+  private saveToDisk(domain: string, { cert, key }: CertKeyPair): void {
     const dir = this.domainDir(domain);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'cert.pem'), cert, { mode: 0o644 });
     fs.writeFileSync(path.join(dir, 'key.pem'), key, { mode: 0o600 });
   }
 
-  _certExpiry(certPem) {
+  private certExpiry(certPem: string): number {
     try {
-      const cert = new (require('crypto').X509Certificate)(certPem);
+      const cert = new crypto.X509Certificate(certPem);
       return new Date(cert.validTo).getTime();
     } catch {
       return 0;
@@ -66,7 +88,7 @@ class CertStore {
   }
 
   /** Returns a tls.SecureContext for the given domain, provisioning/renewing as needed. */
-  async getSecureContext(domain) {
+  async getSecureContext(domain: string): Promise<tls.SecureContext> {
     const cached = this.cache.get(domain);
     if (cached && cached.expiresAt - Date.now() > RENEW_WITHIN_MS) {
       return cached.ctx;
@@ -79,13 +101,14 @@ class CertStore {
       return ctx;
     }
 
-    if (this.pending.has(domain)) return this.pending.get(domain);
+    const existingPending = this.pending.get(domain);
+    if (existingPending) return existingPending;
 
-    const provisioning = this._provision(domain)
+    const provisioning = this.provision(domain)
       .then(({ cert, key }) => {
         this.saveToDisk(domain, { cert, key });
         const ctx = tls.createSecureContext({ cert, key });
-        this.cache.set(domain, { ctx, expiresAt: this._certExpiry(cert) });
+        this.cache.set(domain, { ctx, expiresAt: this.certExpiry(cert) });
         this.pending.delete(domain);
         return ctx;
       })
@@ -98,12 +121,12 @@ class CertStore {
     return provisioning;
   }
 
-  async _provision(domain) {
-    if (this.mode === 'self-signed') return this._provisionSelfSigned(domain);
-    return this._provisionAcme(domain);
+  private async provision(domain: string): Promise<CertKeyPair> {
+    if (this.mode === 'self-signed') return this.provisionSelfSigned(domain);
+    return this.provisionAcme(domain);
   }
 
-  _provisionSelfSigned(domain) {
+  private provisionSelfSigned(domain: string): CertKeyPair {
     const attrs = [{ name: 'commonName', value: domain }];
     const pems = selfsigned.generate(attrs, {
       days: 365,
@@ -116,11 +139,11 @@ class CertStore {
     return { cert: pems.cert, key: pems.private };
   }
 
-  async _getAcmeClient() {
-    if (this._acmeClient) return this._acmeClient;
+  private async getAcmeClient(): Promise<acme.Client> {
+    if (this.acmeClient) return this.acmeClient;
 
     const accountKeyPath = path.join(this.certsDir, 'account-key.pem');
-    let accountKey;
+    let accountKey: Buffer;
     if (fs.existsSync(accountKeyPath)) {
       accountKey = fs.readFileSync(accountKeyPath);
     } else {
@@ -128,29 +151,29 @@ class CertStore {
       fs.writeFileSync(accountKeyPath, accountKey, { mode: 0o600 });
     }
 
-    this._acmeClient = new acme.Client({
+    this.acmeClient = new acme.Client({
       directoryUrl: this.staging ? LETS_ENCRYPT_STAGING : LETS_ENCRYPT_PROD,
       accountKey,
     });
-    return this._acmeClient;
+    return this.acmeClient;
   }
 
-  async _provisionAcme(domain) {
-    const client = await this._getAcmeClient();
+  private async provisionAcme(domain: string): Promise<CertKeyPair> {
+    const client = await this.getAcmeClient();
     const [key, csr] = await acme.forge.createCsr({ commonName: domain });
 
-    let cert;
+    let cert: string;
     try {
       cert = await client.auto({
         csr,
         email: this.acmeEmail,
         termsOfServiceAgreed: true,
         challengePriority: ['http-01'],
-        challengeCreateFn: async (authz, challenge, keyAuthorization) => {
+        challengeCreateFn: async (_authz, challenge, keyAuthorization) => {
           if (challenge.type !== 'http-01') return;
           this.challenges.set(challenge.token, keyAuthorization);
         },
-        challengeRemoveFn: async (authz, challenge) => {
+        challengeRemoveFn: async (_authz, challenge) => {
           this.challenges.delete(challenge.token);
         },
       });
@@ -165,7 +188,7 @@ class CertStore {
             "(a network-level failure was hidden by a bug in the acme-client library). " +
             'Check outbound internet access from this machine to acme-v02.api.letsencrypt.org, ' +
             'and that inbound port 80 is reachable from the internet for the HTTP-01 challenge ' +
-            '(Let\'s Encrypt must be able to fetch http://' +
+            "(Let's Encrypt must be able to fetch http://" +
             domain +
             '/.well-known/acme-challenge/... from outside your network). Then try again.'
         );
@@ -177,9 +200,7 @@ class CertStore {
   }
 
   /** Used by the plain :80 server to answer ACME http-01 challenge requests. */
-  getChallengeResponse(token) {
+  getChallengeResponse(token: string): string | null {
     return this.challenges.get(token) || null;
   }
 }
-
-module.exports = { CertStore };

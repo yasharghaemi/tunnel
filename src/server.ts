@@ -1,27 +1,51 @@
-'use strict';
-
-const http = require('http');
-const tls = require('tls');
-const crypto = require('crypto');
-const { WebSocketServer, WebSocket, createWebSocketStream } = require('ws');
-const { CertStore } = require('./certStore');
-const { log, secureCompare, pipeBidirectional, logRequestLines } = require('./util');
+import * as http from 'http';
+import * as tls from 'tls';
+import * as crypto from 'crypto';
+import type { Duplex } from 'stream';
+import type { Socket } from 'net';
+import { WebSocketServer, WebSocket, createWebSocketStream } from 'ws';
+import { CertStore, type TlsMode } from './certStore';
+import { log, secureCompare, pipeBidirectional, logRequestLines } from './util';
 
 const CONN_WAIT_TIMEOUT_MS = 15000;
 const LIVE_CHECK_PATH = '/host/live';
 const LIVE_CHECK_LINE_RE = /^(GET|HEAD) \/host\/live(\?\S*)? HTTP\/\d\.\d\r?$/;
 
-function liveCheckBody(domain) {
+function liveCheckBody(domain: string): string {
   return JSON.stringify({ live: true, domain, checkedAt: new Date().toISOString() });
 }
 
-function startServer(opts) {
+export interface StartServerOptions {
+  httpPort?: number;
+  httpsPort?: number;
+  controlPort?: number;
+  certsDir: string;
+  /** 'acme' | 'self-signed' */
+  tlsMode?: TlsMode;
+  acmeEmail?: string;
+  staging?: boolean;
+  token?: string | null;
+}
+
+export interface ServerHandle {
+  controlHttp: http.Server;
+  httpServer: http.Server;
+  httpsServer: tls.Server;
+}
+
+interface PendingConn {
+  resolve: (stream: Duplex) => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+export function startServer(opts: StartServerOptions): ServerHandle {
   const {
     httpPort = 80,
     httpsPort = 443,
     controlPort = 7000,
     certsDir,
-    tlsMode = 'acme', // 'acme' | 'self-signed'
+    tlsMode = 'acme',
     acmeEmail,
     staging = false,
     token = null,
@@ -29,35 +53,33 @@ function startServer(opts) {
 
   const certStore = new CertStore({ certsDir, mode: tlsMode, acmeEmail, staging });
 
-  /** @type {Map<string, WebSocket>} domain -> control connection */
-  const domainClients = new Map();
-  /** @type {Map<string, {resolve: Function, reject: Function, timer: NodeJS.Timeout}>} */
-  const pendingConns = new Map();
+  const domainClients = new Map<string, WebSocket>();
+  const pendingConns = new Map<string, PendingConn>();
 
   // ---- Control + data WebSocket server (LAN/localhost only, not internet-exposed) ----
-  const controlHttp = http.createServer((req, res) => {
+  const controlHttp = http.createServer((_req, res) => {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('tunnelme control channel\n');
   });
   const wss = new WebSocketServer({ noServer: true });
 
   controlHttp.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url, 'http://internal');
+    const url = new URL(req.url || '', 'http://internal');
     if (url.pathname === '/_tunnelme/control') {
       wss.handleUpgrade(req, socket, head, (ws) => handleControlConnection(ws));
     } else if (url.pathname === '/_tunnelme/data') {
-      const id = url.searchParams.get('id');
+      const id = url.searchParams.get('id') || '';
       wss.handleUpgrade(req, socket, head, (ws) => handleDataConnection(ws, id));
     } else {
       socket.destroy();
     }
   });
 
-  function handleControlConnection(ws) {
-    const ownedDomains = new Set();
+  function handleControlConnection(ws: WebSocket): void {
+    const ownedDomains = new Set<string>();
 
-    ws.on('message', (raw) => {
-      let msg;
+    ws.on('message', (raw: Buffer) => {
+      let msg: { type?: string; token?: string; tunnels?: Array<{ domain?: string; port?: number }> };
       try {
         msg = JSON.parse(raw.toString());
       } catch {
@@ -74,7 +96,7 @@ function startServer(opts) {
           ws.send(JSON.stringify({ type: 'error', message: '"tunnels" must be an array' }));
           return;
         }
-        const registered = [];
+        const registered: string[] = [];
         for (const t of msg.tunnels) {
           if (!t || !t.domain || t.port === undefined || t.port === null) continue;
           domainClients.set(t.domain, ws);
@@ -98,7 +120,7 @@ function startServer(opts) {
     ws.on('error', () => {});
   }
 
-  function handleDataConnection(ws, id) {
+  function handleDataConnection(ws: WebSocket, id: string): void {
     const pending = pendingConns.get(id);
     if (!pending) {
       ws.close();
@@ -110,7 +132,7 @@ function startServer(opts) {
   }
 
   /** Ask the owning client to open a data connection for `domain`; resolves to a duplex stream. */
-  function requestProxyConnection(domain) {
+  function requestProxyConnection(domain: string): Promise<Duplex> {
     const ws = domainClients.get(domain);
     if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error('no client connected for domain'));
 
@@ -130,10 +152,10 @@ function startServer(opts) {
   const httpServer = http.createServer((req, res) => {
     const remote = `${req.socket.remoteAddress}:${req.socket.remotePort}`;
     log(`${remote} -> ${req.headers.host || '(no host)'} ${req.method} ${req.url}`);
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
     if (url.pathname.startsWith('/.well-known/acme-challenge/')) {
-      const token_ = url.pathname.split('/').pop();
-      const keyAuth = certStore.getChallengeResponse(token_);
+      const challengeToken = url.pathname.split('/').pop() || '';
+      const keyAuth = certStore.getChallengeResponse(challengeToken);
       if (keyAuth) {
         res.writeHead(200, { 'content-type': 'text/plain' });
         res.end(keyAuth);
@@ -190,7 +212,7 @@ function startServer(opts) {
 
   httpsServer.on('tlsClientError', () => {});
 
-  function proxyRawConnection(socket, domain) {
+  function proxyRawConnection(socket: Socket, domain: string): void {
     const remote = `${socket.remoteAddress}:${socket.remotePort}`;
     log(`connection from ${remote} for ${domain}`);
     socket.on('close', () => log(`connection closed from ${remote} for ${domain}`));
@@ -200,7 +222,7 @@ function startServer(opts) {
     // the local app to be up). Anything else is pushed back with unshift()
     // and proxied exactly as before. pause()+unshift() happen synchronously
     // within this handler so no bytes are lost between the peek and the retry.
-    socket.once('data', (chunk) => {
+    socket.once('data', (chunk: Buffer) => {
       const firstLine = chunk.toString('latin1').split('\r\n', 1)[0];
       if (LIVE_CHECK_LINE_RE.test(firstLine)) {
         log(`${remote} -> ${domain} GET ${LIVE_CHECK_PATH} (answered by tunnelme server)`);
@@ -216,7 +238,7 @@ function startServer(opts) {
     });
   }
 
-  async function forwardToClient(socket, domain, remote) {
+  async function forwardToClient(socket: Socket, domain: string, remote: string): Promise<void> {
     try {
       // Wait for the client's data connection before attaching any 'data'
       // consumer -- attaching one earlier would switch the socket into
@@ -225,13 +247,13 @@ function startServer(opts) {
       logRequestLines(socket, `${remote} -> ${domain}`);
       pipeBidirectional(socket, dataStream);
     } catch (err) {
-      log(`proxy failed for ${domain}:`, err.message);
+      log(`proxy failed for ${domain}:`, (err as Error).message);
       socket.destroy();
     }
   }
 
-  function onListenError(label, port) {
-    return (err) => {
+  function onListenError(label: string, port: number) {
+    return (err: NodeJS.ErrnoException) => {
       if (err.code === 'EACCES') {
         log(
           `Failed to listen on :${port} (${label}): permission denied. ` +
@@ -258,5 +280,3 @@ function startServer(opts) {
 
   return { controlHttp, httpServer, httpsServer };
 }
-
-module.exports = { startServer };

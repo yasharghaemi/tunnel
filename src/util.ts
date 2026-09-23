@@ -1,29 +1,30 @@
-'use strict';
+import * as crypto from 'crypto';
+import type { Duplex } from 'stream';
+import type { Socket } from 'net';
 
-const crypto = require('crypto');
-
-function log(...args) {
+export function log(...args: unknown[]): void {
   console.log(new Date().toISOString(), ...args);
 }
 
 /** Formats an Error for logging, unwrapping AggregateError (whose own .message is often empty). */
-function describeError(err) {
+export function describeError(err: unknown): string {
   if (!err) return String(err);
-  if (Array.isArray(err.errors) && err.errors.length > 0) {
-    return err.errors.map((e) => e.message || String(e)).join('; ');
+  const e = err as { errors?: unknown[]; message?: string; code?: string };
+  if (Array.isArray(e.errors) && e.errors.length > 0) {
+    return e.errors.map((sub) => (sub as { message?: string }).message || String(sub)).join('; ');
   }
-  return err.message || err.code || String(err);
+  return e.message || e.code || String(err);
 }
 
 /** Constant-time string comparison, safe for comparing against a network-supplied secret. */
-function secureCompare(a, b) {
+export function secureCompare(a: string, b: string): boolean {
   const ha = crypto.createHash('sha256').update(String(a)).digest();
   const hb = crypto.createHash('sha256').update(String(b)).digest();
   return crypto.timingSafeEqual(ha, hb);
 }
 
 /** Bidirectionally pipes two duplex streams and destroys both if either errors or closes. */
-function pipeBidirectional(a, b) {
+export function pipeBidirectional(a: Duplex, b: Duplex): void {
   a.pipe(b);
   b.pipe(a);
 
@@ -51,11 +52,11 @@ const MAX_LEFTOVER_BYTES = 8192;
  * protocol upgrade (e.g. WebSocket) traffic is no longer HTTP and simply
  * won't match, so logging naturally goes quiet for that connection.
  */
-function logRequestLines(socket, label) {
+export function logRequestLines(socket: Socket, label: string): void {
   let leftover = '';
-  socket.on('data', (chunk) => {
+  socket.on('data', (chunk: Buffer) => {
     leftover += chunk.toString('latin1');
-    let idx;
+    let idx: number;
     while ((idx = leftover.indexOf('\r\n')) !== -1) {
       const line = leftover.slice(0, idx);
       leftover = leftover.slice(idx + 2);
@@ -67,5 +68,3 @@ function logRequestLines(socket, label) {
     }
   });
 }
-
-module.exports = { log, secureCompare, pipeBidirectional, describeError, logRequestLines };

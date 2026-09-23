@@ -1,8 +1,7 @@
-'use strict';
-
-const fs = require('fs');
-const path = require('path');
-const yaml = require('js-yaml');
+import * as fs from 'fs';
+import * as path from 'path';
+import * as yaml from 'js-yaml';
+import type { TunnelmeConfig } from './types';
 
 /**
  * Loads a tunnelme config file (.yaml/.yml/.json).
@@ -13,12 +12,12 @@ const yaml = require('js-yaml');
  *   tunnels: [ { port: 3000, url: "app.example.com" }, ... ]
  * }
  */
-function loadConfig(configPath) {
+export function loadConfig(configPath: string): TunnelmeConfig {
   const resolved = path.resolve(configPath);
   const raw = fs.readFileSync(resolved, 'utf8');
   const ext = path.extname(resolved).toLowerCase();
 
-  const data = ext === '.json' ? JSON.parse(raw) : yaml.load(raw);
+  const data = (ext === '.json' ? JSON.parse(raw) : yaml.load(raw)) as Partial<TunnelmeConfig> | null;
 
   if (!data || typeof data !== 'object') {
     throw new Error(`Config file ${resolved} did not parse to an object`);
@@ -31,7 +30,5 @@ function loadConfig(configPath) {
       throw new Error(`tunnels[${i}] must have both "port" and "url"`);
     }
   }
-  return data;
+  return data as TunnelmeConfig;
 }
-
-module.exports = { loadConfig };

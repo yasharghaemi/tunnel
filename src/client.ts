@@ -1,27 +1,30 @@
-'use strict';
-
-const net = require('net');
-const WebSocket = require('ws');
-const { createWebSocketStream } = require('ws');
-const { log, pipeBidirectional, describeError } = require('./util');
+import * as net from 'net';
+import WebSocket, { createWebSocketStream } from 'ws';
+import { log, pipeBidirectional, describeError } from './util';
+import type { Tunnel } from './types';
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 15000];
 
-/**
- * @param {object} opts
- * @param {string} opts.serverUrl e.g. "ws://localhost:7000"
- * @param {string|null} opts.token
- * @param {{port:number, domain:string}[]} opts.tunnels
- */
-function startClient(opts) {
+export interface StartClientOptions {
+  /** e.g. "ws://localhost:7000" */
+  serverUrl: string;
+  token?: string | null;
+  tunnels: Tunnel[];
+}
+
+export interface ClientHandle {
+  stop(): void;
+}
+
+export function startClient(opts: StartClientOptions): ClientHandle {
   const { serverUrl, token = null, tunnels } = opts;
   const portByDomain = new Map(tunnels.map((t) => [t.domain, t.port]));
 
   let attempt = 0;
   let stopped = false;
-  let currentWs = null;
+  let currentWs: WebSocket | null = null;
 
-  function connect() {
+  function connect(): void {
     if (stopped) return;
     const ws = new WebSocket(`${serverUrl}/_tunnelme/control`);
     currentWs = ws;
@@ -38,8 +41,8 @@ function startClient(opts) {
       );
     });
 
-    ws.on('message', (raw) => {
-      let msg;
+    ws.on('message', (raw: Buffer) => {
+      let msg: { type?: string; domains?: unknown; message?: string; id?: string; domain?: string };
       try {
         msg = JSON.parse(raw.toString());
       } catch {
@@ -54,7 +57,7 @@ function startClient(opts) {
         }
       } else if (msg.type === 'error') {
         log('server error:', msg.message);
-      } else if (msg.type === 'conn') {
+      } else if (msg.type === 'conn' && msg.id && msg.domain) {
         handleConnRequest(msg.id, msg.domain);
       }
     });
@@ -65,19 +68,19 @@ function startClient(opts) {
       scheduleReconnect();
     });
 
-    ws.on('error', (err) => {
+    ws.on('error', (err: Error) => {
       log('control connection error:', describeError(err));
     });
   }
 
-  function scheduleReconnect() {
+  function scheduleReconnect(): void {
     if (stopped) return;
     const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)];
     attempt += 1;
     setTimeout(connect, delay);
   }
 
-  function handleConnRequest(id, domain) {
+  function handleConnRequest(id: string, domain: string): void {
     const port = portByDomain.get(domain);
     if (!port) return;
 
@@ -89,7 +92,7 @@ function startClient(opts) {
       pipeBidirectional(localSocket, dataStream);
     });
 
-    dataWs.on('error', (err) => {
+    dataWs.on('error', (err: Error) => {
       log(`data connection error for ${domain}:`, describeError(err));
     });
   }
@@ -103,5 +106,3 @@ function startClient(opts) {
     },
   };
 }
-
-module.exports = { startClient };

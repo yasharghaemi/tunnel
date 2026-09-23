@@ -1,18 +1,18 @@
-'use strict';
-
-const os = require('os');
-const https = require('https');
-const { log } = require('./util');
+import * as os from 'os';
+import * as https from 'https';
+import { log } from './util';
+import type { upnpNat as UpnpNatFn, Gateway } from '@achingbrain/nat-port-mapper';
 
 const IP_ECHO_SERVICES = ['https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com'];
 
 // @achingbrain/nat-port-mapper is ESM-only; this project is CommonJS, so it
-// must be loaded via dynamic import() rather than require().
-function loadUpnpNat() {
+// must be loaded via dynamic import() rather than require(). (Type-only
+// imports above are erased at compile time and don't trigger this issue.)
+function loadUpnpNat(): Promise<typeof UpnpNatFn> {
   return import('@achingbrain/nat-port-mapper').then((mod) => mod.upnpNat);
 }
 
-function fetchText(url, timeoutMs = 5000) {
+function fetchText(url: string, timeoutMs = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
     const req = https.get(url, { timeout: timeoutMs }, (res) => {
       if (res.statusCode !== 200) {
@@ -30,7 +30,7 @@ function fetchText(url, timeoutMs = 5000) {
 }
 
 /** Picks this machine's primary LAN IPv4 address (non-internal). */
-function localIp() {
+function localIp(): string {
   const ifaces = os.networkInterfaces();
   for (const name of Object.keys(ifaces)) {
     for (const iface of ifaces[name] || []) {
@@ -45,7 +45,7 @@ function localIp() {
  * UPnP/NAT-PMP first (no third party involved), falls back to a plain HTTP
  * echo service if the router doesn't support/allow that.
  */
-async function detectPublicIp() {
+export async function detectPublicIp(): Promise<string> {
   try {
     const upnpNat = await loadUpnpNat();
     const client = upnpNat();
@@ -76,7 +76,7 @@ async function detectPublicIp() {
 }
 
 /** Builds a working public hostname for `port` using sslip.io's wildcard DNS -- no domain ownership needed, no traffic relay. */
-function quickDomain(port, ip) {
+export function quickDomain(port: number, ip: string): string {
   return `p${port}.${ip.split('.').join('-')}.sslip.io`;
 }
 
@@ -86,19 +86,19 @@ function quickDomain(port, ip) {
  * compatible router was found. Mappings auto-renew for as long as the
  * process runs (handled by the underlying library).
  */
-async function autoPortForward(ports) {
+export async function autoPortForward(ports: number[]): Promise<(() => Promise<void>) | null> {
   const host = localIp();
   const upnpNat = await loadUpnpNat();
   const client = upnpNat({ description: 'tunnelme' });
 
-  let gateway = null;
+  let gateway: Gateway | null = null;
   try {
     for await (const gw of client.findGateways({ signal: AbortSignal.timeout(4000) })) {
       gateway = gw;
       break;
     }
   } catch (err) {
-    log(`UPnP: gateway discovery failed: ${err.message}`);
+    log(`UPnP: gateway discovery failed: ${(err as Error).message}`);
   }
 
   if (!gateway) {
@@ -111,13 +111,12 @@ async function autoPortForward(ports) {
       const mapping = await gateway.map(port, host, { externalPort: port, protocol: 'tcp' });
       log(`UPnP: mapped external port ${mapping.externalPort} -> ${host}:${port}`);
     } catch (err) {
-      log(`UPnP: failed to map port ${port}: ${err.message}`);
+      log(`UPnP: failed to map port ${port}: ${(err as Error).message}`);
     }
   }
 
+  const foundGateway = gateway;
   return async () => {
-    await gateway.stop().catch(() => {});
+    await foundGateway.stop().catch(() => {});
   };
 }
-
-module.exports = { detectPublicIp, quickDomain, autoPortForward };

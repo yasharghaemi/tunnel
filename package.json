@@ -13,14 +13,13 @@
     "self-hosted"
   ],
   "bin": {
-    "tunnelme": "bin/tunnelme.js"
+    "tunnelme": "dist/bin/tunnelme.js"
   },
   "engines": {
     "node": ">=18"
   },
   "files": [
-    "bin",
-    "src"
+    "dist"
   ],
   "dependencies": {
     "@achingbrain/nat-port-mapper": "^4.0.5",
@@ -33,9 +32,15 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.3",
     "@commitlint/config-conventional": "^21.2.3",
-    "husky": "^9.1.7"
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^26.6.2",
+    "@types/ws": "^8.18.1",
+    "husky": "^9.1.7",
+    "typescript": "^7.0.2"
   },
   "scripts": {
-    "prepare": "husky"
+    "prepare": "husky",
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
   }
 }

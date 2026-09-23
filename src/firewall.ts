@@ -1,14 +1,12 @@
-'use strict';
-
-const { execFileSync } = require('child_process');
-const { log } = require('./util');
+import { execFileSync } from 'child_process';
+import { log } from './util';
 
 /**
  * Adds Windows Firewall inbound allow rules for the given TCP ports.
  * Requires an Administrator terminal; idempotent (safe to run repeatedly).
  * No-ops with a message on non-Windows platforms.
  */
-function setupWindowsFirewall(ports) {
+export function setupWindowsFirewall(ports: number[]): void {
   if (process.platform !== 'win32') {
     log('--setup-firewall is only implemented for Windows; configure your firewall manually on this platform');
     return;
@@ -31,7 +29,8 @@ function setupWindowsFirewall(ports) {
         log(`firewall: inbound rule for TCP ${port} already exists ("${ruleName}")`);
       }
     } catch (err) {
-      const msg = err.stderr ? err.stderr.toString().trim() : err.message;
+      const e = err as { stderr?: Buffer; message: string };
+      const msg = e.stderr ? e.stderr.toString().trim() : e.message;
       log(`firewall: failed to add rule for TCP ${port}: ${msg}`);
       if (/access is denied|requested operation requires elevation/i.test(msg)) {
         log('firewall: this requires an Administrator terminal -- re-run as Administrator');
@@ -39,5 +38,3 @@ function setupWindowsFirewall(ports) {
     }
   }
 }
-
-module.exports = { setupWindowsFirewall };
