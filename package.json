@@ -1,6 +1,6 @@
 {
   "name": "tunnelmate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reverse-proxy a public domain to a localhost port, for dev/testing.",
   "license": "MIT",
   "type": "commonjs",
@@ -23,6 +23,7 @@
     "src"
   ],
   "dependencies": {
+    "@achingbrain/nat-port-mapper": "^4.0.5",
     "acme-client": "^5.4.0",
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",

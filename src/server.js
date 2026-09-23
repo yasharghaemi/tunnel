@@ -230,6 +230,28 @@ function startServer(opts) {
     }
   }
 
+  function onListenError(label, port) {
+    return (err) => {
+      if (err.code === 'EACCES') {
+        log(
+          `Failed to listen on :${port} (${label}): permission denied. ` +
+            (process.platform === 'win32'
+              ? 'Binding to ports below 1024 requires an Administrator terminal -- re-run as Administrator.'
+              : 'Binding to ports below 1024 requires root -- re-run with sudo, or use a port above 1024.')
+        );
+      } else if (err.code === 'EADDRINUSE') {
+        log(`Failed to listen on :${port} (${label}): another process is already using this port.`);
+      } else {
+        log(`Failed to listen on :${port} (${label}):`, err.message);
+      }
+      process.exit(1);
+    };
+  }
+
+  controlHttp.on('error', onListenError('control channel', controlPort));
+  httpServer.on('error', onListenError('http', httpPort));
+  httpsServer.on('error', onListenError('https', httpsPort));
+
   controlHttp.listen(controlPort, () => log(`control channel listening on ws://0.0.0.0:${controlPort}`));
   httpServer.listen(httpPort, () => log(`http (acme + redirect) listening on :${httpPort}`));
   httpsServer.listen(httpsPort, () => log(`https tunnel entrypoint listening on :${httpsPort}`));

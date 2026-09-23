@@ -66,6 +66,53 @@ internet (used for the HTTP-01 challenge) — both of which you already have.
 If you want to test the flow without hitting Let's Encrypt's rate limits,
 add `--staging` first, then drop it once it's working end-to-end.
 
+## Skipping the manual setup
+
+Everything above (port-forwarding, DNS, firewall, Administrator privileges)
+is inherent to being reachable from the internet without relying on someone
+else's infrastructure (unlike, say, Cloudflare Tunnel, which avoids all of
+that specifically by routing your traffic through Cloudflare's network
+instead of yours). A few flags automate what can be automated:
+
+**`--quick`** — don't own a domain, or just want to test something right
+now? Skip `--url` entirely:
+
+```powershell
+tunnelme serve --tls acme --email you@example.com --port 3000 --quick
+```
+
+This detects your public IP and builds a working URL via
+[sslip.io](https://sslip.io)'s wildcard DNS (e.g.
+`https://p3000.24-78-95-66.sslip.io`) — no domain registration, no DNS
+records to configure, and no traffic relay (sslip.io only ever answers a DNS
+query; your data goes straight from the visitor to your machine, same as
+with a real domain).
+
+**`--upnp`** — attempts to configure port forwarding on your router
+automatically via UPnP/NAT-PMP, instead of doing it by hand in the router's
+admin page:
+
+```powershell
+tunnelme serve --tls acme --email you@example.com --port 3000 --quick --upnp
+```
+
+Not all routers support or allow this (many ISP-provided routers disable it
+by default) — if none is found, it logs that and falls back to needing
+manual port-forwarding, same as before.
+
+**`--setup-firewall`** — adds the Windows Firewall inbound rules for you
+(needs an Administrator terminal; safe to run repeatedly):
+
+```powershell
+tunnelme serve --tls acme --email you@example.com --port 3000 --quick --setup-firewall
+```
+
+Put together, `--quick --upnp --setup-firewall` (run as Administrator) gets
+about as close to "one command, zero manual network configuration" as a
+fully self-hosted tunnel can get — the one thing that still can't be
+automated is your static IP itself, since that's an ISP-level property, not
+something software on your machine controls.
+
 ## Expose a local dev server
 
 If your app and `serve` run on the **same machine**, skip the second
@@ -162,7 +209,8 @@ tunnelme --config <path> [--server <ws-url>] [--token <token>]
 tunnelme serve [--http-port 80] [--https-port 443] [--control-port 7000]
                [--tls acme|self-signed] [--email <email>] [--staging]
                [--certs-dir <path>] [--token <token>]
-               [--port <port> --url <domain>] [--config <path>]
+               [--port <port> [--url <domain> | --quick]] [--config <path>]
+               [--upnp] [--setup-firewall]
 ```
 
 The last line of `serve`'s options is optional: pass `--port`/`--url` (or
