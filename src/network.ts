@@ -1,15 +1,33 @@
 import * as os from 'os';
 import * as https from 'https';
 import { log } from './util';
-import type { upnpNat as UpnpNatFn, Gateway } from '@achingbrain/nat-port-mapper';
 
 const IP_ECHO_SERVICES = ['https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com'];
 
+// Minimal local shape of what we use from @achingbrain/nat-port-mapper --
+// declared locally (instead of imported) to avoid Node16 module resolution's
+// resolution-mode requirements for type-only imports of an ESM-only package.
+interface PortMapping {
+  externalHost: string;
+  externalPort: number;
+}
+interface Gateway {
+  externalIp(): Promise<string>;
+  map(internalPort: number, internalHost: string, options?: Record<string, unknown>): Promise<PortMapping>;
+  stop(): Promise<void>;
+}
+interface UpnpNatClient {
+  findGateways(options?: { signal?: AbortSignal }): AsyncGenerator<Gateway, void, unknown>;
+}
+type UpnpNatFn = (options?: Record<string, unknown>) => UpnpNatClient;
+
 // @achingbrain/nat-port-mapper is ESM-only; this project is CommonJS, so it
-// must be loaded via dynamic import() rather than require(). (Type-only
-// imports above are erased at compile time and don't trigger this issue.)
-function loadUpnpNat(): Promise<typeof UpnpNatFn> {
-  return import('@achingbrain/nat-port-mapper').then((mod) => mod.upnpNat);
+// must be loaded via dynamic import() rather than require() -- and the
+// dynamic import() must reach the compiled output unchanged (see tsconfig's
+// "module": "Node16", which -- unlike "CommonJS" -- doesn't downlevel it into
+// a plain require() call, which would defeat the whole point).
+function loadUpnpNat(): Promise<UpnpNatFn> {
+  return import('@achingbrain/nat-port-mapper').then((mod) => mod.upnpNat as UpnpNatFn);
 }
 
 function fetchText(url: string, timeoutMs = 5000): Promise<string> {
